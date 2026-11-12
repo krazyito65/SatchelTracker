@@ -12,9 +12,9 @@
 - **3-Tab View (`Overall` | `Session` | `History`):**
   - **Overall:** Persistent all-time counts and percentages across all sessions.
   - **Session:** Tracks your current login session (persists across `/reload` and resets only on a fresh login after logging out, or when manually reset).
-  - **History:** Displays a `Last:` icon strip of your last 8 rolls plus a chronological roll log with relative timestamps.
+  - **History:** Displays a `Last:` icon strip of your last 8 rolls plus a scrollable chronological roll log (up to 100 rolls) with relative timestamps.
 - **Compact Mode (Horizontal & Vertical):**
-  - Minimal icon + count strip. Click `C` on the header (or `+` in compact mode) to toggle; right-click `C` / `+` to flip between Horizontal and Vertical layouts.
+  - Minimal icon + count strip (or recent 8-roll icon strip when on the `History` tab). Click `C` on the header (or `+` in compact mode) to toggle; right-click `C` / `+` to flip between Horizontal and Vertical layouts; middle-click `+` to cycle `Overall` / `Session` / `History` in Compact Mode.
 - **Auto-Show When Equipped:**
   - Automatically shows when **Satchel of Potions** is equipped in either trinket slot and hides when unequipped.
 - **Minimap Button:**

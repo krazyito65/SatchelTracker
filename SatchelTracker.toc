@@ -2,7 +2,7 @@
 ## Title: |cffffcc00Satchel|r Tracker
 ## Notes: Tracks Health, Mana, Speed, and Damage (plus Crits) from the Satchel of Potions trinket.
 ## Author: Leon
-## Version: 1.0.1
+## Version: 1.0.2
 ## SavedVariables: SatchelTrackerDB
 ## IconTexture: Interface\Icons\INV_Misc_Bag_SatchelofCenarius
 ## X-Curse-Project-ID: 1799615

@@ -22,7 +22,7 @@ local ADDON, ns = ...
 ns.SATCHEL_ITEM_ID    = 280766
 ns.SATCHEL_SPELL_ID   = 1309685
 ns.SATCHEL_SPEED_BUFF = 1309728
-ns.MAX_HISTORY        = 30
+ns.MAX_HISTORY        = 100
 
 ns.OUTCOME_KEYS = { "health", "mana", "speed", "damage" }
 

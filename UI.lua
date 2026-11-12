@@ -101,12 +101,73 @@ function ns.UpdateVisibility()
     end
 end
 
+local function StyleHistorySlot(slot, entry, rank, showEmptyBox)
+    slot.entry = entry
+    slot.rank  = rank
+    if entry and entry.outcome == "unknown" then
+        slot.icon:SetTexture("Interface\\Icons\\INV_Misc_QuestionMark")
+        slot.icon:Show()
+        slot.border.top:SetColorTexture(0.90, 0.49, 0.13, 1)
+        slot.border.bottom:SetColorTexture(0.90, 0.49, 0.13, 1)
+        slot.border.left:SetColorTexture(0.90, 0.49, 0.13, 1)
+        slot.border.right:SetColorTexture(0.90, 0.49, 0.13, 1)
+        slot:Show()
+    elseif entry and ROW_BY_KEY[entry.outcome] then
+        local rcfg = ROW_BY_KEY[entry.outcome]
+        slot.icon:SetTexture(rcfg.icon)
+        slot.icon:Show()
+        if entry.isCrit then
+            slot.border.top:SetColorTexture(1, 0.35, 0.2, 1)
+            slot.border.bottom:SetColorTexture(1, 0.35, 0.2, 1)
+            slot.border.left:SetColorTexture(1, 0.35, 0.2, 1)
+            slot.border.right:SetColorTexture(1, 0.35, 0.2, 1)
+        else
+            slot.border.top:SetColorTexture(rcfg.color[1], rcfg.color[2], rcfg.color[3], 0.85)
+            slot.border.bottom:SetColorTexture(rcfg.color[1], rcfg.color[2], rcfg.color[3], 0.85)
+            slot.border.left:SetColorTexture(rcfg.color[1], rcfg.color[2], rcfg.color[3], 0.85)
+            slot.border.right:SetColorTexture(rcfg.color[1], rcfg.color[2], rcfg.color[3], 0.85)
+        end
+        slot:Show()
+    elseif showEmptyBox then
+        slot.icon:Hide()
+        slot.border.top:SetColorTexture(0.20, 0.23, 0.28, 0.55)
+        slot.border.bottom:SetColorTexture(0.20, 0.23, 0.28, 0.55)
+        slot.border.left:SetColorTexture(0.20, 0.23, 0.28, 0.55)
+        slot.border.right:SetColorTexture(0.20, 0.23, 0.28, 0.55)
+        slot:Show()
+    else
+        slot:Hide()
+    end
+end
+
+local function ShowHistorySlotTooltip(self)
+    local entry = self.entry
+    if not entry then return end
+    GameTooltip:SetOwner(self, "ANCHOR_TOP")
+    local rank = self.rank or 1
+    if entry.outcome == "unknown" then
+        GameTooltip:AddLine(string.format("#%d  unknown: %s", rank, tostring(entry.conflicts or "?")), 0.90, 0.49, 0.13)
+    elseif ROW_BY_KEY[entry.outcome] then
+        local rcfg = ROW_BY_KEY[entry.outcome]
+        local critTag = entry.isCrit and " (CRIT!)" or ""
+        GameTooltip:AddLine(string.format("#%d  %s%s", rank, rcfg.label, critTag), rcfg.color[1], rcfg.color[2], rcfg.color[3])
+    end
+    if entry.timestamp then
+        GameTooltip:AddLine(FormatAgo(entry.timestamp), 0.70, 0.74, 0.80)
+    end
+    GameTooltip:Show()
+end
+
 -------------------------------------------------------------------------------
 --  Refresh UI (Full Mode + Compact Mode)
 -------------------------------------------------------------------------------
-function ns.RefreshUI()
+function ns.RefreshUI(newOutcome)
     local f = ns.frame
     if not f or not ns.db then return end
+
+    if newOutcome then
+        f.histScrollOffset = 0
+    end
 
     local isCompact = ns.db.compact == true
     local activeTab = ns.db.activeTab or "overall"
@@ -116,7 +177,6 @@ function ns.RefreshUI()
     local ssTotal   = ns.GetTotal(ssStats)
     local hist      = ns.db.history or {}
 
-    -- Stats source for Compact Mode & Stats Panel (if on history tab, compact shows session or overall)
     local statsMode = (activeTab == "session") and "session" or "overall"
     local stats     = (statsMode == "session") and ssStats or ovStats
     local total     = (statsMode == "session") and ssTotal or ovTotal
@@ -126,8 +186,54 @@ function ns.RefreshUI()
         f.compactRoot:Show()
 
         local vert = (ns.db.compactLayout == "vertical")
-        local itemW, itemH = 44, 22
         local ctrlW = 18
+
+        -- Compact History View (non-scrollable recent icon strip)
+        if activeTab == "history" then
+            for _, rcfg in ipairs(ROWS) do
+                f.compactCells[rcfg.key]:Hide()
+            end
+            f.compactHistRoot:Show()
+
+            local numSlots = #f.compactHistSlots
+            local slotSize = 18
+            local slotGap  = 3
+
+            if vert then
+                local cw = 30
+                local ch = PAD * 2 + (numSlots * (slotSize + slotGap)) - slotGap + 16
+                f:SetSize(cw, ch)
+                f.compactExpandBtn:ClearAllPoints()
+                f.compactExpandBtn:SetPoint("TOP", f.compactRoot, "TOP", 0, -2)
+
+                for i = 1, numSlots do
+                    local slot = f.compactHistSlots[i]
+                    slot:ClearAllPoints()
+                    slot:SetSize(slotSize, slotSize)
+                    slot:SetPoint("TOP", f.compactRoot, "TOP", 0, -(16 + (i - 1) * (slotSize + slotGap)))
+                    StyleHistorySlot(slot, hist[i], i, true)
+                end
+            else
+                local cw = PAD * 2 + (numSlots * (slotSize + slotGap)) - slotGap + ctrlW
+                local ch = 28
+                f:SetSize(cw, ch)
+                f.compactExpandBtn:ClearAllPoints()
+                f.compactExpandBtn:SetPoint("RIGHT", f.compactRoot, "RIGHT", -4, 0)
+
+                for i = 1, numSlots do
+                    local slot = f.compactHistSlots[i]
+                    slot:ClearAllPoints()
+                    slot:SetSize(slotSize, slotSize)
+                    slot:SetPoint("LEFT", f.compactRoot, "LEFT", PAD + (i - 1) * (slotSize + slotGap), 0)
+                    StyleHistorySlot(slot, hist[i], i, true)
+                end
+            end
+            return
+        end
+
+        -- Compact Stats View (Overall or Session)
+        f.compactHistRoot:Hide()
+        local itemW, itemH = 44, 22
 
         if vert then
             local cw = 64
@@ -138,6 +244,7 @@ function ns.RefreshUI()
 
             for i, rcfg in ipairs(ROWS) do
                 local cell = f.compactCells[rcfg.key]
+                cell:Show()
                 cell:ClearAllPoints()
                 cell:SetSize(cw - PAD * 2, itemH)
                 cell:SetPoint("TOPLEFT", f.compactRoot, "TOPLEFT", PAD, -(16 + (i - 1) * (itemH + 2)))
@@ -151,6 +258,7 @@ function ns.RefreshUI()
 
             for i, rcfg in ipairs(ROWS) do
                 local cell = f.compactCells[rcfg.key]
+                cell:Show()
                 cell:ClearAllPoints()
                 cell:SetSize(itemW, itemH)
                 cell:SetPoint("LEFT", f.compactRoot, "LEFT", PAD + (i - 1) * (itemW + 4), 0)
@@ -180,10 +288,10 @@ function ns.RefreshUI()
         f:SetSize(FRAME_W, f.fullHeightNoCrit)
     end
 
-    -- Update Tab Labels
+    -- Update Tab Labels (no count next to History tab)
     f.tabs.overall.label:SetFormattedText("Overall (%d)", ovTotal)
     f.tabs.session.label:SetFormattedText("Session (%d)", ssTotal)
-    f.tabs.history.label:SetFormattedText("History (%d)", #hist)
+    f.tabs.history.label:SetText("History")
 
     for key, btn in pairs(f.tabs) do
         if key == activeTab then
@@ -210,43 +318,47 @@ function ns.RefreshUI()
 
         -- 1. Update recent icon strip (up to last 8 rolls, newest on left)
         for i = 1, #f.histIcons do
-            local slot = f.histIcons[i]
-            local entry = hist[i]
-            if entry and entry.outcome == "unknown" then
-                slot.icon:SetTexture("Interface\\Icons\\INV_Misc_QuestionMark")
-                slot.border.top:SetColorTexture(0.90, 0.49, 0.13, 1)
-                slot.border.bottom:SetColorTexture(0.90, 0.49, 0.13, 1)
-                slot.border.left:SetColorTexture(0.90, 0.49, 0.13, 1)
-                slot.border.right:SetColorTexture(0.90, 0.49, 0.13, 1)
-                slot:Show()
-            elseif entry and ROW_BY_KEY[entry.outcome] then
-                local rcfg = ROW_BY_KEY[entry.outcome]
-                slot.icon:SetTexture(rcfg.icon)
-                if entry.isCrit then
-                    slot.border.top:SetColorTexture(1, 0.35, 0.2, 1)
-                    slot.border.bottom:SetColorTexture(1, 0.35, 0.2, 1)
-                    slot.border.left:SetColorTexture(1, 0.35, 0.2, 1)
-                    slot.border.right:SetColorTexture(1, 0.35, 0.2, 1)
-                else
-                    slot.border.top:SetColorTexture(rcfg.color[1], rcfg.color[2], rcfg.color[3], 0.85)
-                    slot.border.bottom:SetColorTexture(rcfg.color[1], rcfg.color[2], rcfg.color[3], 0.85)
-                    slot.border.left:SetColorTexture(rcfg.color[1], rcfg.color[2], rcfg.color[3], 0.85)
-                    slot.border.right:SetColorTexture(rcfg.color[1], rcfg.color[2], rcfg.color[3], 0.85)
-                end
-                slot:Show()
+            StyleHistorySlot(f.histIcons[i], hist[i], i, false)
+        end
+
+        -- 2. Clamp scroll offset & update scrollbar
+        local maxOffset = math.max(0, #hist - HIST_ROWS)
+        local offset = math.max(0, math.min(f.histScrollOffset or 0, maxOffset))
+        f.histScrollOffset = offset
+
+        local hasScroll = maxOffset > 0
+        local rightInset = hasScroll and -(PAD + 7) or -(PAD - 1)
+
+        if f.histScrollBar then
+            if hasScroll then
+                f.histScrollBar:Show()
+                local trackH = f.histScrollBar:GetHeight()
+                local thumbH = math.max(14, math.floor(trackH * (HIST_ROWS / #hist) + 0.5))
+                local travel = math.max(0, trackH - thumbH)
+                local thumbY = (maxOffset > 0) and -(travel * (offset / maxOffset)) or 0
+                f.histScrollThumb:SetHeight(thumbH)
+                f.histScrollThumb:ClearAllPoints()
+                f.histScrollThumb:SetPoint("TOPLEFT", f.histScrollBar, "TOPLEFT", 0, thumbY)
+                f.histScrollThumb:SetPoint("TOPRIGHT", f.histScrollBar, "TOPRIGHT", 0, thumbY)
             else
-                slot:Hide()
+                f.histScrollBar:Hide()
             end
         end
 
-        -- 2. Update chronological rows
+        -- 3. Update chronological rows based on scroll offset
         for i = 1, HIST_ROWS do
             local hrow = f.histRows[i]
-            local entry = hist[i]
+            local idx = offset + i
+            local entry = hist[idx]
+            local hy = -(PAD + HIST_STRIP_H + 4 + (i - 1) * (HIST_ROW_H + 2))
+            hrow:ClearAllPoints()
+            hrow:SetPoint("TOPLEFT", PAD - 1, hy)
+            hrow:SetPoint("TOPRIGHT", rightInset, hy)
+
             if entry and entry.outcome == "unknown" then
                 hrow.icon:SetTexture("Interface\\Icons\\INV_Misc_QuestionMark")
                 hrow.leftText:SetFormattedText("|cff7f8c8d#%d|r  |cffe67e22unknown: %s|r",
-                    i, tostring(entry.conflicts or "?"))
+                    idx, tostring(entry.conflicts or "?"))
                 hrow.rightText:SetText(FormatAgo(entry.timestamp))
                 hrow:Show()
             elseif entry and ROW_BY_KEY[entry.outcome] then
@@ -254,7 +366,7 @@ function ns.RefreshUI()
                 hrow.icon:SetTexture(rcfg.icon)
                 local critTag = entry.isCrit and " |cffff7675(CRIT!)|r" or ""
                 hrow.leftText:SetFormattedText("|cff7f8c8d#%d|r  |cff%s%s|r%s",
-                    i, rcfg.hex, rcfg.label, critTag)
+                    idx, rcfg.hex, rcfg.label, critTag)
                 hrow.rightText:SetText(FormatAgo(entry.timestamp))
                 hrow:Show()
             else
@@ -610,13 +722,30 @@ function ns.BuildUI()
     f.critRow = critRow
 
     ---------------------------------------------------------------------------
-    --  History Panel (Recent Strip + Last Rolls List)
+    --  History Panel (Recent Strip + Scrollable Rolls List)
     ---------------------------------------------------------------------------
     local historyPanel = CreateFrame("Frame", nil, fullRoot)
     historyPanel:SetPoint("TOPLEFT", tabBar, "BOTTOMLEFT", 0, 0)
     historyPanel:SetPoint("BOTTOMRIGHT", fullRoot, "BOTTOMRIGHT", 0, 0)
+    historyPanel:EnableMouse(true)
+    historyPanel:EnableMouseWheel(true)
     historyPanel:Hide()
     f.historyPanel = historyPanel
+    f.histScrollOffset = 0
+
+    local function ScrollHistoryBy(delta)
+        local hist = (ns.db and ns.db.history) or {}
+        local maxOffset = math.max(0, #hist - HIST_ROWS)
+        local newOffset = math.max(0, math.min((f.histScrollOffset or 0) - delta, maxOffset))
+        if newOffset ~= f.histScrollOffset then
+            f.histScrollOffset = newOffset
+            ns.RefreshUI()
+        end
+    end
+
+    historyPanel:SetScript("OnMouseWheel", function(_, delta)
+        ScrollHistoryBy(delta)
+    end)
 
     -- Top recent icon strip (newest on left, up to 8 icons)
     local stripFrame = CreateFrame("Frame", nil, historyPanel)
@@ -638,21 +767,30 @@ function ns.BuildUI()
         local slot = CreateFrame("Frame", nil, stripFrame)
         slot:SetSize(16, 16)
         slot:SetPoint("LEFT", 36 + (i - 1) * 20, 0)
+        slot:EnableMouse(true)
         slot.icon = slot:CreateTexture(nil, "ARTWORK")
         slot.icon:SetAllPoints()
         slot.icon:SetTexCoord(0.08, 0.92, 0.08, 0.92)
         slot.border = CreateBorder(slot, 1, 1, 1, 0.8)
+        slot:SetScript("OnEnter", ShowHistorySlotTooltip)
+        slot:SetScript("OnLeave", function() GameTooltip:Hide() end)
         f.histIcons[i] = slot
     end
 
-    -- Chronological rows below strip
+    -- Scrollable chronological rows below strip
     f.histRows = {}
     local hy = -(PAD + HIST_STRIP_H + 4)
+    local listHeight = (HIST_ROWS * HIST_ROW_H) + ((HIST_ROWS - 1) * 2)
     for i = 1, HIST_ROWS do
         local hrow = CreateFrame("Frame", nil, historyPanel)
         hrow:SetPoint("TOPLEFT", PAD - 1, hy)
         hrow:SetPoint("TOPRIGHT", -(PAD - 1), hy)
         hrow:SetHeight(HIST_ROW_H)
+        hrow:EnableMouse(true)
+        hrow:EnableMouseWheel(true)
+        hrow:SetScript("OnMouseWheel", function(_, delta)
+            ScrollHistoryBy(delta)
+        end)
 
         local hrbg = hrow:CreateTexture(nil, "BACKGROUND")
         hrbg:SetAllPoints()
@@ -679,13 +817,71 @@ function ns.BuildUI()
         hy = hy - (HIST_ROW_H + 2)
     end
 
+    -- Vertical scrollbar track & thumb on the right of the history rows
+    local scrollBar = CreateFrame("Frame", nil, historyPanel)
+    scrollBar:SetPoint("TOPRIGHT", -(PAD - 1), -(PAD + HIST_STRIP_H + 4))
+    scrollBar:SetSize(5, listHeight)
+    scrollBar:EnableMouse(true)
+    scrollBar:EnableMouseWheel(true)
+    scrollBar:SetScript("OnMouseWheel", function(_, delta)
+        ScrollHistoryBy(delta)
+    end)
+    scrollBar:Hide()
+
+    local sbTrack = scrollBar:CreateTexture(nil, "BACKGROUND")
+    sbTrack:SetAllPoints()
+    sbTrack:SetColorTexture(0.08, 0.10, 0.13, 0.90)
+
+    local sbThumb = CreateFrame("Button", nil, scrollBar)
+    sbThumb:SetWidth(5)
+    sbThumb:SetHeight(20)
+    sbThumb:SetPoint("TOPLEFT", 0, 0)
+    sbThumb:EnableMouse(true)
+    local sbThumbTex = sbThumb:CreateTexture(nil, "ARTWORK")
+    sbThumbTex:SetAllPoints()
+    sbThumbTex:SetColorTexture(0.45, 0.50, 0.58, 0.85)
+    sbThumb.tex = sbThumbTex
+
+    local function UpdateScrollFromCursor()
+        local hist = (ns.db and ns.db.history) or {}
+        local maxOffset = math.max(0, #hist - HIST_ROWS)
+        if maxOffset <= 0 then return end
+        local top = scrollBar:GetTop()
+        local bottom = scrollBar:GetBottom()
+        if not top or not bottom or top <= bottom then return end
+        local _, cy = GetCursorPosition()
+        local scale = scrollBar:GetEffectiveScale()
+        cy = cy / scale
+        local ratio = math.max(0, math.min(1, (top - cy) / (top - bottom)))
+        local newOffset = math.floor(ratio * maxOffset + 0.5)
+        if newOffset ~= f.histScrollOffset then
+            f.histScrollOffset = newOffset
+            ns.RefreshUI()
+        end
+    end
+
+    scrollBar:SetScript("OnMouseDown", function()
+        UpdateScrollFromCursor()
+    end)
+    sbThumb:SetScript("OnMouseDown", function(self)
+        self.tex:SetColorTexture(0.75, 0.80, 0.88, 1)
+        self:SetScript("OnUpdate", UpdateScrollFromCursor)
+    end)
+    sbThumb:SetScript("OnMouseUp", function(self)
+        self.tex:SetColorTexture(0.45, 0.50, 0.58, 0.85)
+        self:SetScript("OnUpdate", nil)
+    end)
+
+    f.histScrollBar   = scrollBar
+    f.histScrollThumb = sbThumb
+
     local histEmpty = historyPanel:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
     histEmpty:SetPoint("CENTER", 0, -8)
     histEmpty:SetText("No rolls recorded yet.")
     f.histEmpty = histEmpty
 
     ---------------------------------------------------------------------------
-    --  Compact Mode Root (Horizontal or Vertical Icon + Number strip)
+    --  Compact Mode Root (Stats strip OR Compact History icon strip)
     ---------------------------------------------------------------------------
     local compactRoot = CreateFrame("Frame", nil, f)
     compactRoot:SetAllPoints()
@@ -696,6 +892,7 @@ function ns.BuildUI()
     compactRoot:SetScript("OnDragStop", function() StopMove(f) end)
     f.compactRoot = compactRoot
 
+    -- Compact Stats Cells (Overall / Session)
     f.compactCells = {}
     for _, rcfg in ipairs(ROWS) do
         local cell = CreateFrame("Frame", nil, compactRoot)
@@ -742,27 +939,72 @@ function ns.BuildUI()
         f.compactCells[rcfg.key] = cell
     end
 
-    -- Expand / Flip button in Compact Mode [+]
+    -- Compact History View (last 8 roll icons, non-scrollable)
+    local compactHistRoot = CreateFrame("Frame", nil, compactRoot)
+    compactHistRoot:SetAllPoints()
+    compactHistRoot:Hide()
+    f.compactHistRoot = compactHistRoot
+
+    f.compactHistSlots = {}
+    for i = 1, 8 do
+        local slot = CreateFrame("Frame", nil, compactHistRoot)
+        slot:SetSize(18, 18)
+        slot:EnableMouse(true)
+        slot:RegisterForDrag("LeftButton")
+        slot:SetScript("OnDragStart", function() StartMove(f) end)
+        slot:SetScript("OnDragStop", function() StopMove(f) end)
+
+        local slotBg = slot:CreateTexture(nil, "BACKGROUND")
+        slotBg:SetAllPoints()
+        slotBg:SetColorTexture(0.11, 0.13, 0.17, 0.80)
+
+        slot.icon = slot:CreateTexture(nil, "ARTWORK")
+        slot.icon:SetPoint("TOPLEFT", 1, -1)
+        slot.icon:SetPoint("BOTTOMRIGHT", -1, 1)
+        slot.icon:SetTexCoord(0.08, 0.92, 0.08, 0.92)
+        slot.border = CreateBorder(slot, 1, 1, 1, 0.8)
+
+        slot:SetScript("OnEnter", ShowHistorySlotTooltip)
+        slot:SetScript("OnLeave", function() GameTooltip:Hide() end)
+        f.compactHistSlots[i] = slot
+    end
+
+    -- Expand / Flip / Cycle button in Compact Mode [+]
     local expandBtn = CreateFrame("Button", nil, compactRoot)
     expandBtn:SetSize(14, 14)
-    expandBtn:RegisterForClicks("LeftButtonUp", "RightButtonUp")
+    expandBtn:RegisterForClicks("LeftButtonUp", "RightButtonUp", "MiddleButtonUp")
     expandBtn.label = expandBtn:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
     expandBtn.label:SetPoint("CENTER")
     expandBtn.label:SetText("|cffffcc00+|r")
-    expandBtn:SetScript("OnClick", function(_, button)
+    expandBtn:SetScript("OnClick", function(self, button)
         if not ns.db then return end
         if button == "RightButton" then
             ns.db.compactLayout = (ns.db.compactLayout == "vertical") and "horizontal" or "vertical"
+        elseif button == "MiddleButton" then
+            local cur = ns.db.activeTab or "overall"
+            if cur == "overall" then
+                ns.db.activeTab = "session"
+            elseif cur == "session" then
+                ns.db.activeTab = "history"
+            else
+                ns.db.activeTab = "overall"
+            end
         else
             ns.db.compact = false
         end
         ns.RefreshUI()
+        if GameTooltip:GetOwner() == self and self:GetScript("OnEnter") then
+            self:GetScript("OnEnter")(self)
+        end
     end)
     expandBtn:SetScript("OnEnter", function(self)
         expandBtn.label:SetText("|cffffffff+|r")
+        local cur = (ns.db and ns.db.activeTab) or "overall"
+        local modeLabel = (cur == "history" and "History") or (cur == "session" and "Session") or "Overall"
         GameTooltip:SetOwner(self, "ANCHOR_TOP")
-        GameTooltip:AddLine("Compact Controls", 1, 0.84, 0.2)
+        GameTooltip:AddLine("Compact Controls (" .. modeLabel .. ")", 1, 0.84, 0.2)
         GameTooltip:AddLine("Left-Click: Expand to Full Window", 0.85, 0.85, 0.85)
+        GameTooltip:AddLine("Middle-Click: Cycle View (Overall / Session / History)", 0.75, 0.78, 0.82)
         GameTooltip:AddLine("Right-Click: Flip Horizontal / Vertical", 0.65, 0.68, 0.72)
         GameTooltip:Show()
     end)
