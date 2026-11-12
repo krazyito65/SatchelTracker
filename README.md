@@ -19,7 +19,8 @@
   - Automatically shows when **Satchel of Potions** is equipped in either trinket slot and hides when unequipped.
 - **Minimap Button:**
   - **Left-Click:** Toggle window
-  - **Shift + Left-Click / Middle-Click:** Toggle Compact Mode
+  - **Shift + Left-Click:** Toggle Compact Mode
+  - **Middle-Click:** Undo last recorded roll
   - **Right-Click:** Cycle `Overall` / `Session` / `History` tabs
   - **Shift + Right-Click:** Reset Session stats
 
@@ -30,6 +31,7 @@
 - `/satchel minimap` — Show / hide the minimap button
 - `/satchel lock` — Lock / unlock window position
 - `/satchel equip` — Toggle auto-show only when equipped
+- `/satchel undo` — Remove the last recorded roll
 - `/satchel reset` — Reset current session stats
 - `/satchel reset overall` — Reset all-time Overall, Session, and History stats
 - `/satchel debug` — Toggle debug event logging

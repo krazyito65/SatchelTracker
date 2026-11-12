@@ -865,8 +865,9 @@ function ns.BuildMinimapButton()
                 ns.UpdateVisibility()
             end
         elseif button == "MiddleButton" then
-            ns.db.compact = not ns.db.compact
-            ns.RefreshUI()
+            if ns.UndoLastRoll then
+                ns.UndoLastRoll()
+            end
         elseif button == "RightButton" then
             if IsShiftKeyDown() then
                 ns.ResetSession()
@@ -882,6 +883,9 @@ function ns.BuildMinimapButton()
                 end
                 ns.RefreshUI()
             end
+        end
+        if GameTooltip:GetOwner() == btn and btn:GetScript("OnEnter") then
+            btn:GetScript("OnEnter")(btn)
         end
     end)
 
@@ -900,6 +904,7 @@ function ns.BuildMinimapButton()
         GameTooltip:AddLine(" ")
         GameTooltip:AddLine("|cffffcc00Left-Click:|r Toggle Tracker Window", 0.75, 0.78, 0.82)
         GameTooltip:AddLine("|cffffcc00Shift + Left-Click:|r Toggle Compact Mode", 0.75, 0.78, 0.82)
+        GameTooltip:AddLine("|cffffcc00Middle-Click:|r Undo Last Roll", 0.75, 0.78, 0.82)
         GameTooltip:AddLine("|cffffcc00Right-Click:|r Cycle Tabs (Overall / Session / History)", 0.75, 0.78, 0.82)
         GameTooltip:AddLine("|cffffcc00Shift + Right-Click:|r Reset Session", 0.75, 0.78, 0.82)
         GameTooltip:Show()

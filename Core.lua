@@ -237,6 +237,69 @@ local function InitDB()
     CopyDefaults(ns.DEFAULTS, SatchelTrackerDB)
     ns.db = SatchelTrackerDB
     ns.session = ns.db.session
+
+    -- One-time cleanup for the false fullMana:overmanaFallback roll triggered while crafting
+    if not ns.db._cleanedFalseFallbackV1 then
+        ns.db._cleanedFalseFallbackV1 = true
+        local lastTrace = ns.db.debugLog and ns.db.debugLog[1]
+        local lastHist  = ns.db.history and ns.db.history[1]
+        if lastTrace and type(lastTrace.resolution) == "string"
+           and lastTrace.resolution:find("overmanaFallback", 1, true)
+           and lastHist and lastHist.outcome == "mana" then
+            if ns.db.overall and (ns.db.overall.mana or 0) > 0 then
+                ns.db.overall.mana = ns.db.overall.mana - 1
+            end
+            if ns.db.session and (ns.db.session.mana or 0) > 0 then
+                ns.db.session.mana = ns.db.session.mana - 1
+            end
+            table.remove(ns.db.history, 1)
+            table.remove(ns.db.debugLog, 1)
+        end
+    end
+end
+
+function ns.UndoLastRoll()
+    if not ns.db or not ns.db.history or #ns.db.history == 0 then
+        Print("No roll history to undo.")
+        return false
+    end
+    local entry = table.remove(ns.db.history, 1)
+    local outcome = entry and entry.outcome
+    if outcome and ns.db.overall and ns.db.overall[outcome] ~= nil then
+        ns.db.overall[outcome] = math.max(0, (ns.db.overall[outcome] or 1) - 1)
+        if ns.db.session and ns.db.session[outcome] ~= nil then
+            ns.db.session[outcome] = math.max(0, (ns.db.session[outcome] or 1) - 1)
+        end
+        if outcome == "damage" and entry.isCrit then
+            ns.db.overall.damageCrit = math.max(0, (ns.db.overall.damageCrit or 1) - 1)
+            if ns.db.session then
+                ns.db.session.damageCrit = math.max(0, (ns.db.session.damageCrit or 1) - 1)
+            end
+        end
+    end
+    Print(string.format("Removed last recorded roll: |cffffcc00%s%s|r.",
+        tostring(outcome or "unknown"):upper(),
+        (entry and entry.isCrit) and " (CRIT)" or ""))
+    if ns.RefreshUI then ns.RefreshUI() end
+    return true
+end
+
+function ns.IsSatchelOnCooldown()
+    for _, slot in ipairs({ 13, 14 }) do
+        if GetInventoryItemID("player", slot) == ns.SATCHEL_ITEM_ID then
+            local start, duration, enable = GetInventoryItemCooldown("player", slot)
+            if not issecret(duration) and type(duration) == "number" and duration > 60 then
+                return true
+            end
+        end
+    end
+    if C_Container and C_Container.GetItemCooldown then
+        local start, duration, enable = C_Container.GetItemCooldown(ns.SATCHEL_ITEM_ID)
+        if not issecret(duration) and type(duration) == "number" and duration > 60 then
+            return true
+        end
+    end
+    return false
 end
 
 function ns.IsSatchelEquipped()
@@ -348,8 +411,9 @@ end
 --  Active trinket proc detection window & Speed Buff (1309728) detector
 -------------------------------------------------------------------------------
 local activeWindow = nil
-local preCastSnapshot = nil -- captured on UNIT_SPELLCAST_SENT
-local recentCombatEvent = nil -- captured if UNIT_COMBAT fires milliseconds before UNIT_SPELLCAST_SUCCEEDED
+local preCastSnapshot = nil -- captured on UNIT_SPELLCAST_SENT(1309685)
+local preCastBuffer = nil   -- buffers same-frame child events between UNIT_SPELLCAST_SENT(1309685) and UNIT_SPELLCAST_SUCCEEDED(1309685)
+local recentCombatEvent = nil
 local lastSpeedAuraInstanceID = nil
 local lastSpeedRecordTime = 0
 
@@ -621,6 +685,23 @@ local function CheckResourceDeltas(reason)
     end
 end
 
+-- Route a detected signal into activeWindow if open, or buffer it in preCastBuffer
+-- if it arrived in the same frame between UNIT_SPELLCAST_SENT(1309685) and UNIT_SPELLCAST_SUCCEEDED(1309685).
+local function RecordOrBufferSignal(outcome, isCrit, reason, isAuth, spellID)
+    if activeWindow then
+        if spellID then activeWindow.lastSpellID = spellID end
+        ResolveWindow(outcome, isCrit, reason, isAuth)
+    elseif preCastBuffer and (GetTime() - preCastBuffer.time) <= 0.25 then
+        table.insert(preCastBuffer.signals, {
+            outcome = outcome,
+            isCrit  = isCrit,
+            reason  = reason,
+            isAuth  = isAuth,
+            spellID = spellID,
+        })
+    end
+end
+
 local function StartDetectionWindow(triggerSpellID)
     local now = GetTime()
     -- Guard against duplicate trigger events within 0.2s
@@ -683,17 +764,21 @@ local function StartDetectionWindow(triggerSpellID)
 
     DebugPrint(string.format("Satchel activated (spell %s). Watching for outcome...", tostring(triggerSpellID)))
 
-    -- Check if UNIT_COMBAT already fired milliseconds before UNIT_SPELLCAST_SUCCEEDED in the same frame
-    if recentCombatEvent and (now - recentCombatEvent.time) <= 0.15 then
-        local rc = recentCombatEvent
-        recentCombatEvent = nil
-        ResolveWindow(rc.outcome, rc.isCrit, "sameFrame:" .. rc.source)
-        return
+    -- Replay any child spell / combat text / aura signals that fired in the same frame
+    -- between UNIT_SPELLCAST_SENT(1309685) and UNIT_SPELLCAST_SUCCEEDED(1309685)!
+    if preCastBuffer and (now - preCastBuffer.time) <= 0.25 and #preCastBuffer.signals > 0 then
+        local buffered = preCastBuffer.signals
+        preCastBuffer = nil
+        for _, sig in ipairs(buffered) do
+            if sig.spellID then activeWindow.lastSpellID = sig.spellID end
+            ResolveWindow(sig.outcome, sig.isCrit, sig.reason, sig.isAuth)
+        end
+    else
+        preCastBuffer = nil
     end
 
     -- Check immediately in case 1309728 or HP/Mana delta already applied in the same packet
     CheckResourceDeltas("immediate")
-    if activeWindow and activeWindow.outcome then return end
 
     local windowRef = activeWindow
     local traceRef  = activeTrace
@@ -720,17 +805,9 @@ local function StartDetectionWindow(triggerSpellID)
                     CheckResourceDeltas("timer1.00s")
                 end
                 if activeWindow and not activeWindow.outcome then
-                    -- Neither Speed (1309728), Damage (WOUND), nor Health (HEAL / hpDelta) fired.
-                    -- When at full Mana (or non-mana class), a Mana Potion proc restores 0 mana and fires no aura/combat event!
-                    -- Conversely, if Mana was NOT full (so a Mana proc would have increased mana) and HP WAS full, it was a full-HP Health proc.
-                    local hpFull   = (activeWindow.hpBefore and activeWindow.maxHp and activeWindow.hpBefore >= activeWindow.maxHp - 15)
-                    local manaFull = (not activeWindow.maxMana or activeWindow.maxMana == 0)
-                                  or (activeWindow.manaBefore and activeWindow.maxMana and activeWindow.manaBefore >= activeWindow.maxMana - 15)
-
-                    if hpFull and not manaFull then
-                        ResolveWindow("health", false, "fullHP:overhealFallback")
-                    else
-                        ResolveWindow("mana", false, "fullMana:overmanaFallback")
+                    DebugPrint("Detection window expired at 1.0s with no outcome — ignored.")
+                    if traceRef then
+                        traceRef.resolution = "ignored (no outcome detected)"
                     end
                 end
             end)
@@ -834,22 +911,29 @@ ev:SetScript("OnEvent", function(_, event, arg1, arg2, arg3, arg4, arg5)
 
     if event == "UNIT_SPELLCAST_SENT" then
         -- arg1 = "player", arg2 = target, arg3 = castGUID, arg4 = spellID
-        -- Note: In WoW Forever, child spells (1309725 Healing Potion, 1309728 Speed, etc.)
+        -- Note: In WoW Forever, child spells (1309725 Healing Potion, 1309726 Restore Mana, 1309728 Speed)
         -- fire UNIT_SPELLCAST_SUCCEEDED in the same frame *between* UNIT_SPELLCAST_SENT(1309685)
-        -- and UNIT_SPELLCAST_SUCCEEDED(1309685)! So we open the detection window right on SENT!
+        -- and UNIT_SPELLCAST_SUCCEEDED(1309685). However, if the player clicks the trinket while busy
+        -- crafting/casting, UNIT_SPELLCAST_SENT(1309685) fires and the server rejects the cast
+        -- (UNIT_SPELLCAST_SUCCEEDED(1309685) never fires). So we buffer same-frame signals in preCastBuffer
+        -- and ONLY open the detection window when UNIT_SPELLCAST_SUCCEEDED(1309685) confirms the cast!
         local spellID = arg4
         if ns.db and ns.db.debugMode then
             RecordDebugEvent("UNIT_SPELLCAST_SENT", "spell=" .. DescribeSpell(spellID))
         end
         if not issecret(spellID) and spellID and triggerSpells[spellID] then
+            local now = GetTime()
             local _, speedKey = GetSpeedBuffState()
             preCastSnapshot = {
-                time     = GetTime(),
+                time     = now,
                 hp       = SafeNumber(UnitHealth("player")),
                 mana     = SafeNumber(UnitPower("player", 0)),
                 speedKey = speedKey,
             }
-            StartDetectionWindow(spellID)
+            preCastBuffer = {
+                time    = now,
+                signals = {},
+            }
         end
         return
     end
@@ -869,13 +953,12 @@ ev:SetScript("OnEvent", function(_, event, arg1, arg2, arg3, arg4, arg5)
             return
         end
 
-        if activeWindow then
+        if activeWindow or (preCastBuffer and (GetTime() - preCastBuffer.time) <= 0.25) then
             local outcome = ClassifySpell(spellID)
             if outcome then
-                activeWindow.lastSpellID = spellID
                 local isAuth = (spellID >= 1309680 and spellID <= 1309760)
                 DebugPrint(string.format("Child spell cast: %s -> %s", DescribeSpell(spellID), tostring(outcome)))
-                ResolveWindow(outcome, false, "spell:" .. tostring(spellID), isAuth)
+                RecordOrBufferSignal(outcome, false, "spell:" .. tostring(spellID), isAuth, spellID)
             end
         end
         return
@@ -885,14 +968,16 @@ ev:SetScript("OnEvent", function(_, event, arg1, arg2, arg3, arg4, arg5)
         if activeTrace and ns.db and ns.db.debugMode then
             RecordDebugEvent("UNIT_AURA", DescribeAuraUpdateInfo(arg2))
         end
-        if not activeWindow then return end
+        local inPreCast = (not activeWindow) and preCastBuffer and (GetTime() - preCastBuffer.time) <= 0.25
+        if not activeWindow and not inPreCast then return end
         local hasSpeed, speedKey, speedSid = GetSpeedBuffState()
         if hasSpeed then
-            if speedSid == ns.SATCHEL_SPEED_BUFF or not activeWindow.speedKeyBefore or speedKey ~= activeWindow.speedKeyBefore then
+            local prevKey = (activeWindow and activeWindow.speedKeyBefore) or (preCastSnapshot and preCastSnapshot.speedKey)
+            if speedSid == ns.SATCHEL_SPEED_BUFF or not prevKey or speedKey ~= prevKey then
                 lastSpeedAuraInstanceID = speedKey
                 lastSpeedRecordTime = GetTime()
                 local isAuth = (speedSid == ns.SATCHEL_SPEED_BUFF)
-                ResolveWindow("speed", false, "UNIT_AURA:" .. tostring(speedSid), isAuth)
+                RecordOrBufferSignal("speed", false, "UNIT_AURA:" .. tostring(speedSid), isAuth)
                 return
             end
         end
@@ -909,17 +994,19 @@ ev:SetScript("OnEvent", function(_, event, arg1, arg2, arg3, arg4, arg5)
                 SafeStr(arg2), SafeStr(arg3), SafeStr(arg4), SafeStr(arg5)))
         end
 
-        if activeWindow then
-            if combatEvent == "HEAL" and (GetTime() - activeWindow.startTime) <= 0.15 then
+        local inPreCast = (not activeWindow) and preCastBuffer and (GetTime() - preCastBuffer.time) <= 0.15
+        if activeWindow or inPreCast then
+            local elapsed = activeWindow and (GetTime() - activeWindow.startTime) or 0
+            if combatEvent == "HEAL" and elapsed <= 0.15 then
                 DebugPrint("UNIT_COMBAT: HEAL")
-                ResolveWindow("health", false, "UNIT_COMBAT:HEAL", false)
-            elseif combatEvent == "ENERGIZE" and (GetTime() - activeWindow.startTime) <= 0.15 then
+                RecordOrBufferSignal("health", false, "UNIT_COMBAT:HEAL", false)
+            elseif combatEvent == "ENERGIZE" and elapsed <= 0.15 then
                 DebugPrint("UNIT_COMBAT: ENERGIZE")
-                ResolveWindow("mana", false, "UNIT_COMBAT:ENERGIZE", false)
+                RecordOrBufferSignal("mana", false, "UNIT_COMBAT:ENERGIZE", false)
             elseif combatEvent == "WOUND" and school == 4 and flagText ~= "ABSORB" then
                 local isCrit = (flagText == "CRITICAL") or (amount ~= nil and amount > 280)
                 DebugPrint(string.format("UNIT_COMBAT: WOUND school=%s flag=%s", tostring(school), tostring(flagText)))
-                ResolveWindow("damage", isCrit, "UNIT_COMBAT:WOUND", false)
+                RecordOrBufferSignal("damage", isCrit, "UNIT_COMBAT:WOUND", false)
             end
         end
         return
@@ -930,22 +1017,23 @@ ev:SetScript("OnEvent", function(_, event, arg1, arg2, arg3, arg4, arg5)
         if activeTrace and ns.db and ns.db.debugMode then
             RecordDebugEvent("COMBAT_TEXT_UPDATE", "type=" .. SafeStr(arg1))
         end
-        if not activeWindow then return end
+        local inPreCast = (not activeWindow) and preCastBuffer and (GetTime() - preCastBuffer.time) <= 0.12
+        if not activeWindow and not inPreCast then return end
         -- Satchel COMBAT_TEXT_UPDATE events always fire in the same frame (+0ms) as activation.
         -- Ignoring COMBAT_TEXT_UPDATE after 120ms prevents mob spell hits at +560ms from causing false conflicts!
-        if (GetTime() - activeWindow.startTime) > 0.12 then return end
+        if activeWindow and (GetTime() - activeWindow.startTime) > 0.12 then return end
         if ctype == "MANA" or ctype == "ENERGIZE" or ctype == "PERIODIC_ENERGIZE" then
             DebugPrint("COMBAT_TEXT_UPDATE: " .. tostring(ctype))
-            ResolveWindow("mana", false, "COMBAT_TEXT:" .. ctype, false)
+            RecordOrBufferSignal("mana", false, "COMBAT_TEXT:" .. ctype, false)
         elseif ctype == "HEAL" or ctype == "HEAL_CRIT" then
             DebugPrint("COMBAT_TEXT_UPDATE: " .. tostring(ctype))
-            ResolveWindow("health", false, "COMBAT_TEXT:" .. ctype, false)
+            RecordOrBufferSignal("health", false, "COMBAT_TEXT:" .. ctype, false)
         elseif ctype == "SPELL_DAMAGE_CRIT" then
             DebugPrint("COMBAT_TEXT_UPDATE: " .. tostring(ctype))
-            ResolveWindow("damage", true, "COMBAT_TEXT:" .. ctype, false)
+            RecordOrBufferSignal("damage", true, "COMBAT_TEXT:" .. ctype, false)
         elseif ctype == "SPELL_DAMAGE" then
             DebugPrint("COMBAT_TEXT_UPDATE: " .. tostring(ctype))
-            ResolveWindow("damage", false, "COMBAT_TEXT:" .. ctype, false)
+            RecordOrBufferSignal("damage", false, "COMBAT_TEXT:" .. ctype, false)
         end
         return
     end
@@ -1039,6 +1127,9 @@ SlashCmdList.SATCHELTRACKER = function(msg)
             Print("Current Session stats reset. (Use '/satchel reset overall' to clear all-time stats.)")
         end
 
+    elseif cmd == "undo" then
+        ns.UndoLastRoll()
+
     elseif cmd == "test" then
         local roll = math.random(1, 4)
         local outcome = ns.OUTCOME_KEYS[roll]
@@ -1064,6 +1155,7 @@ SlashCmdList.SATCHELTRACKER = function(msg)
         Print("  |cffffcc00/satchel minimap|r - Show / hide the minimap button")
         Print("  |cffffcc00/satchel lock|r - Lock / unlock window position")
         Print("  |cffffcc00/satchel equip|r - Toggle auto-show only when equipped")
+        Print("  |cffffcc00/satchel undo|r - Remove the last recorded roll")
         Print("  |cffffcc00/satchel reset|r - Reset current session stats")
         Print("  |cffffcc00/satchel reset overall|r - Reset all-time & session stats")
         Print("  |cffffcc00/satchel test|r - Simulate a random potion roll")
