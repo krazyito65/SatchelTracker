@@ -1,0 +1,10 @@
+package-as: SatchelTracker
+enable-nolib-creation: no
+
+ignore:
+  - .github
+  - .gitignore
+  - README.md
+  - LICENSE
+  - logo.jpg
+  - curseforge_description.txt
