@@ -2,7 +2,7 @@
 --  SatchelTracker  -  UI.lua
 --  Standalone draggable tracker window with:
 --    1. Full Mode: 3 tabs (Overall | Session | History)
---       - Overall & Session: 4 outcome rows + Damage Crits sub-row with % bars
+--       - Overall & Session: 4 outcome rows + Health & Damage Crits sub-rows with % bars
 --       - History: Recent icon strip (last 8) + chronological list of rolls
 --    2. Compact Mode: Horizontal or Vertical icon + count strip
 --    3. Minimap Button: Click to toggle, right-click to cycle tabs
@@ -22,11 +22,17 @@ local HIST_ROW_H     = 18
 
 local ROWS = {
     {
-        key   = "health",
-        label = "Health",
-        icon  = "Interface\\Icons\\INV_Potion_54",
-        color = { 0.18, 0.80, 0.44 }, -- #2ecc71 Green
-        hex   = "2ecc71",
+        key        = "health",
+        label      = "Health",
+        icon       = "Interface\\Icons\\INV_Potion_54",
+        color      = { 0.18, 0.80, 0.44 }, -- #2ecc71 Green
+        hex        = "2ecc71",
+        critKey    = "healthCrit",
+        critHex    = "55efc4",
+        critColor  = { 0.40, 0.95, 0.65 },
+        critFill   = { 0.30, 0.90, 0.55, 0.28 },
+        critBg     = { 0.08, 0.12, 0.10, 0.85 },
+        critBorder = { 0.35, 1.00, 0.55, 1 },
     },
     {
         key   = "mana",
@@ -43,11 +49,17 @@ local ROWS = {
         hex   = "f1c40f",
     },
     {
-        key   = "damage",
-        label = "Damage",
-        icon  = "Interface\\Icons\\Spell_Fire_SelfDestruct",
-        color = { 0.91, 0.30, 0.24 }, -- #e74c3c Red
-        hex   = "e74c3c",
+        key        = "damage",
+        label      = "Damage",
+        icon       = "Interface\\Icons\\Spell_Fire_SelfDestruct",
+        color      = { 0.91, 0.30, 0.24 }, -- #e74c3c Red
+        hex        = "e74c3c",
+        critKey    = "damageCrit",
+        critHex    = "ff7675",
+        critColor  = { 1.00, 0.55, 0.45 },
+        critFill   = { 1.00, 0.45, 0.35, 0.28 },
+        critBg     = { 0.10, 0.09, 0.12, 0.85 },
+        critBorder = { 1.00, 0.35, 0.20, 1 },
     },
 }
 
@@ -117,10 +129,11 @@ local function StyleHistorySlot(slot, entry, rank, showEmptyBox)
         slot.icon:SetTexture(rcfg.icon)
         slot.icon:Show()
         if entry.isCrit then
-            slot.border.top:SetColorTexture(1, 0.35, 0.2, 1)
-            slot.border.bottom:SetColorTexture(1, 0.35, 0.2, 1)
-            slot.border.left:SetColorTexture(1, 0.35, 0.2, 1)
-            slot.border.right:SetColorTexture(1, 0.35, 0.2, 1)
+            local cb = rcfg.critBorder or { 1, 0.35, 0.2, 1 }
+            slot.border.top:SetColorTexture(cb[1], cb[2], cb[3], cb[4])
+            slot.border.bottom:SetColorTexture(cb[1], cb[2], cb[3], cb[4])
+            slot.border.left:SetColorTexture(cb[1], cb[2], cb[3], cb[4])
+            slot.border.right:SetColorTexture(cb[1], cb[2], cb[3], cb[4])
         else
             slot.border.top:SetColorTexture(rcfg.color[1], rcfg.color[2], rcfg.color[3], 0.85)
             slot.border.bottom:SetColorTexture(rcfg.color[1], rcfg.color[2], rcfg.color[3], 0.85)
@@ -268,8 +281,8 @@ function ns.RefreshUI(newOutcome)
         for _, rcfg in ipairs(ROWS) do
             local cell = f.compactCells[rcfg.key]
             local count = stats[rcfg.key] or 0
-            if rcfg.key == "damage" and (stats.damageCrit or 0) > 0 then
-                cell.text:SetFormattedText("%d|cffff7675*|r", count)
+            if rcfg.critKey and (stats[rcfg.critKey] or 0) > 0 then
+                cell.text:SetFormattedText("%d|cff%s*|r", count, rcfg.critHex or "ff7675")
             else
                 cell.text:SetText(tostring(count))
             end
@@ -281,11 +294,16 @@ function ns.RefreshUI(newOutcome)
     f.compactRoot:Hide()
     f.fullRoot:Show()
 
-    local hasEverCrit = (ovStats.damageCrit or 0) > 0
-    if activeTab == "history" or hasEverCrit then
+    local critSubRows = 0
+    for _, rcfg in ipairs(ROWS) do
+        if rcfg.critKey and (ovStats[rcfg.critKey] or 0) > 0 then
+            critSubRows = critSubRows + 1
+        end
+    end
+    if activeTab == "history" then
         f:SetSize(FRAME_W, f.fullHeight)
     else
-        f:SetSize(FRAME_W, f.fullHeightNoCrit)
+        f:SetSize(FRAME_W, f.fullHeightNoCrit + critSubRows * (SUBROW_H + ROW_GAP))
     end
 
     -- Update Tab Labels (no count next to History tab)
@@ -364,7 +382,7 @@ function ns.RefreshUI(newOutcome)
             elseif entry and ROW_BY_KEY[entry.outcome] then
                 local rcfg = ROW_BY_KEY[entry.outcome]
                 hrow.icon:SetTexture(rcfg.icon)
-                local critTag = entry.isCrit and " |cffff7675(CRIT!)|r" or ""
+                local critTag = entry.isCrit and (" |cff" .. (rcfg.critHex or "ff7675") .. "(CRIT!)|r") or ""
                 hrow.leftText:SetFormattedText("|cff7f8c8d#%d|r  |cff%s%s|r%s",
                     idx, rcfg.hex, rcfg.label, critTag)
                 hrow.rightText:SetText(FormatAgo(entry.timestamp))
@@ -381,9 +399,16 @@ function ns.RefreshUI(newOutcome)
     f.historyPanel:Hide()
     f.statsPanel:Show()
 
-    local barMaxW = FRAME_W - PAD * 2 - 2
+    local barMaxW  = FRAME_W - PAD * 2 - 2
+    local critMaxW = barMaxW - 10
+    local yOffset  = -PAD
     for _, rcfg in ipairs(ROWS) do
         local row = f.rows[rcfg.key]
+        row:ClearAllPoints()
+        row:SetPoint("TOPLEFT", PAD - 1, yOffset)
+        row:SetPoint("TOPRIGHT", -(PAD - 1), yOffset)
+        yOffset = yOffset - (ROW_H + ROW_GAP)
+
         local count = stats[rcfg.key] or 0
         local text, pct = FormatCountPct(count, total)
         row.value:SetText(text)
@@ -395,25 +420,29 @@ function ns.RefreshUI(newOutcome)
         else
             row.fill:Hide()
         end
-    end
 
-    -- Damage Crits sub-row (hidden until the first crit ever happens!)
-    if hasEverCrit then
-        f.critRow:Show()
-        local dmgCount  = stats.damage or 0
-        local critCount = stats.damageCrit or 0
-        local critText, critPct = FormatCountPct(critCount, dmgCount)
-        f.critRow.value:SetText(critText)
-        if critPct > 0 then
-            local critMaxW = barMaxW - 10
-            local w = math.max(2, math.floor(critMaxW * (critPct / 100) + 0.5))
-            f.critRow.fill:SetWidth(w)
-            f.critRow.fill:Show()
-        else
-            f.critRow.fill:Hide()
+        local critRow = rcfg.critKey and f.critRows and f.critRows[rcfg.key]
+        if critRow then
+            if (ovStats[rcfg.critKey] or 0) > 0 then
+                critRow:ClearAllPoints()
+                critRow:SetPoint("TOPLEFT", PAD + 9, yOffset)
+                critRow:SetPoint("TOPRIGHT", -(PAD - 1), yOffset)
+                yOffset = yOffset - (SUBROW_H + ROW_GAP)
+                critRow:Show()
+                local critCount = stats[rcfg.critKey] or 0
+                local critText, critPct = FormatCountPct(critCount, count)
+                critRow.value:SetText(critText)
+                if critPct > 0 then
+                    local w = math.max(2, math.floor(critMaxW * (critPct / 100) + 0.5))
+                    critRow.fill:SetWidth(w)
+                    critRow.fill:Show()
+                else
+                    critRow.fill:Hide()
+                end
+            else
+                critRow:Hide()
+            end
         end
-    else
-        f.critRow:Hide()
     end
 end
 
@@ -691,35 +720,44 @@ function ns.BuildUI()
         yOffset = yOffset - (ROW_H + ROW_GAP)
     end
 
-    -- Damage Crits Sub-Row
-    local critRow = CreateFrame("Frame", nil, statsPanel)
-    critRow:SetPoint("TOPLEFT", PAD + 9, yOffset)
-    critRow:SetPoint("TOPRIGHT", -(PAD - 1), yOffset)
-    critRow:SetHeight(SUBROW_H)
+    -- Crit Sub-Rows (Health & Damage, hidden until first crit is recorded)
+    local function CreateCritSubRow(parent, rcfg)
+        local critRow = CreateFrame("Frame", nil, parent)
+        critRow:SetHeight(SUBROW_H)
 
-    local cbg = critRow:CreateTexture(nil, "BACKGROUND")
-    cbg:SetAllPoints()
-    cbg:SetColorTexture(0.10, 0.09, 0.12, 0.85)
+        local cbg = critRow:CreateTexture(nil, "BACKGROUND")
+        cbg:SetAllPoints()
+        cbg:SetColorTexture(rcfg.critBg[1], rcfg.critBg[2], rcfg.critBg[3], rcfg.critBg[4])
 
-    local cfill = critRow:CreateTexture(nil, "BORDER")
-    cfill:SetPoint("TOPLEFT", 1, -1)
-    cfill:SetPoint("BOTTOMLEFT", 1, 1)
-    cfill:SetWidth(1)
-    cfill:SetColorTexture(1.0, 0.45, 0.35, 0.28)
-    critRow.fill = cfill
+        local cfill = critRow:CreateTexture(nil, "BORDER")
+        cfill:SetPoint("TOPLEFT", 1, -1)
+        cfill:SetPoint("BOTTOMLEFT", 1, 1)
+        cfill:SetWidth(1)
+        cfill:SetColorTexture(rcfg.critFill[1], rcfg.critFill[2], rcfg.critFill[3], rcfg.critFill[4])
+        critRow.fill = cfill
 
-    local clbl = critRow:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
-    clbl:SetPoint("LEFT", 6, 0)
-    clbl:SetText("Crits")
-    clbl:SetTextColor(1.0, 0.55, 0.45)
-    critRow.label = clbl
+        local clbl = critRow:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+        clbl:SetPoint("LEFT", 6, 0)
+        clbl:SetText("Crits")
+        clbl:SetTextColor(rcfg.critColor[1], rcfg.critColor[2], rcfg.critColor[3])
+        critRow.label = clbl
 
-    local cval = critRow:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
-    cval:SetPoint("RIGHT", -5, 0)
-    cval:SetJustifyH("RIGHT")
-    critRow.value = cval
+        local cval = critRow:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+        cval:SetPoint("RIGHT", -5, 0)
+        cval:SetJustifyH("RIGHT")
+        critRow.value = cval
 
-    f.critRow = critRow
+        critRow:Hide()
+        return critRow
+    end
+
+    f.critRows = {}
+    for _, rcfg in ipairs(ROWS) do
+        if rcfg.critKey then
+            f.critRows[rcfg.key] = CreateCritSubRow(statsPanel, rcfg)
+        end
+    end
+    f.critRow = f.critRows.damage
 
     ---------------------------------------------------------------------------
     --  History Panel (Recent Strip + Scrollable Rolls List)
@@ -926,11 +964,12 @@ function ns.BuildUI()
             GameTooltip:SetOwner(self, "ANCHOR_TOP")
             GameTooltip:AddLine(rcfg.label .. " (" .. (mode == "session" and "Session" or "Overall") .. ")", rcfg.color[1], rcfg.color[2], rcfg.color[3])
             GameTooltip:AddDoubleLine("Count:", string.format("%d (%.1f%%)", cnt, pct), 0.85, 0.85, 0.85, 1, 1, 1)
-            local ovCrits = (ns.db and ns.db.overall and ns.db.overall.damageCrit) or 0
-            if rcfg.key == "damage" and ovCrits > 0 then
-                local crits = st.damageCrit or 0
+            local ovCrits = (rcfg.critKey and ns.db and ns.db.overall and ns.db.overall[rcfg.critKey]) or 0
+            if rcfg.critKey and ovCrits > 0 then
+                local crits = st[rcfg.critKey] or 0
                 local cpct = (cnt > 0) and (crits / cnt * 100) or 0
-                GameTooltip:AddDoubleLine("Crits:", string.format("%d (%.1f%%)", crits, cpct), 1, 0.55, 0.45, 1, 0.55, 0.45)
+                local cc = rcfg.critColor
+                GameTooltip:AddDoubleLine("Crits:", string.format("%d (%.1f%%)", crits, cpct), cc[1], cc[2], cc[3], cc[1], cc[2], cc[3])
             end
             GameTooltip:Show()
         end)

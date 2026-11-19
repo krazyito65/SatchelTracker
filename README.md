@@ -5,7 +5,7 @@
 ## Features
 
 - **Tracks All 4 Outcomes & Percentages:**
-  - **Health** (Healing Potion effect)
+  - **Health** (Healing Potion effect, plus a hidden Crit sub-row that reveals itself the first time a heal critically strikes)
   - **Mana** (Restore Mana effect)
   - **Speed** (15s Speed buff)
   - **Damage** (Self-inflicted Fire backfire, plus a hidden Crit sub-row that reveals itself the first time your backfire critically hits)

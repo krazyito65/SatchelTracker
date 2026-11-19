@@ -4,7 +4,7 @@
 --  (Item ID: 280766, On-Use Spell ID: 1309685).
 --
 --  Tracks the 4 random immediate outcomes:
---    1. Health (Greater Healing Potion effect)
+--    1. Health (Greater Healing Potion effect + Crit tracking)
 --    2. Mana   (Mana Potion effect)
 --    3. Speed  (Swiftness Potion movement speed buff, Spell ID: 1309728)
 --    4. Damage (Self-inflicted ~216 Fire damage backfire + Crit tracking)
@@ -26,6 +26,11 @@ ns.MAX_HISTORY        = 100
 
 ns.OUTCOME_KEYS = { "health", "mana", "speed", "damage" }
 
+local CRIT_KEY = {
+    health = "healthCrit",
+    damage = "damageCrit",
+}
+
 ns.DEFAULTS = {
     locked           = false,
     onlyWhenEquipped = true,
@@ -37,6 +42,7 @@ ns.DEFAULTS = {
     minimap          = { hide = false, angle = 205 },
     overall          = {
         health     = 0,
+        healthCrit = 0,
         mana       = 0,
         speed      = 0,
         damage     = 0,
@@ -44,6 +50,7 @@ ns.DEFAULTS = {
     },
     session          = {
         health     = 0,
+        healthCrit = 0,
         mana       = 0,
         speed      = 0,
         damage     = 0,
@@ -256,6 +263,47 @@ local function InitDB()
             table.remove(ns.db.debugLog, 1)
         end
     end
+
+    -- One-time credit for the Health Crit captured in debugLog (COMBAT_TEXT:HEAL_CRIT)
+    if not ns.db._creditedHealthCritV1 then
+        ns.db._creditedHealthCritV1 = true
+        local healCritTraces = 0
+        if type(ns.db.debugLog) == "table" then
+            for i, trace in ipairs(ns.db.debugLog) do
+                local hasHealCrit = type(trace.resolution) == "string" and trace.resolution:find("HEAL_CRIT", 1, true) ~= nil
+                if not hasHealCrit and type(trace.confirmations) == "table" then
+                    for _, c in ipairs(trace.confirmations) do
+                        if type(c) == "string" and c:find("COMBAT_TEXT:HEAL_CRIT", 1, true) then
+                            hasHealCrit = true
+                            break
+                        end
+                    end
+                end
+                if hasHealCrit then
+                    healCritTraces = healCritTraces + 1
+                    if type(ns.db.history) == "table" then
+                        local matched = false
+                        for _, h in ipairs(ns.db.history) do
+                            if h.timestamp == 1795056141 and h.outcome == "health" and not h.isCrit then
+                                h.isCrit = true
+                                matched = true
+                                break
+                            end
+                        end
+                        if not matched and i == 1 and ns.db.history[1] and ns.db.history[1].outcome == "health" and not ns.db.history[1].isCrit then
+                            ns.db.history[1].isCrit = true
+                        end
+                    end
+                    if i == 1 and ns.db.session and (ns.db.session.health or 0) > 0 and (ns.db.session.healthCrit or 0) == 0 then
+                        ns.db.session.healthCrit = 1
+                    end
+                end
+            end
+        end
+        if healCritTraces > 0 and ns.db.overall and (ns.db.overall.healthCrit or 0) == 0 then
+            ns.db.overall.healthCrit = healCritTraces
+        end
+    end
 end
 
 function ns.UndoLastRoll()
@@ -270,10 +318,11 @@ function ns.UndoLastRoll()
         if ns.db.session and ns.db.session[outcome] ~= nil then
             ns.db.session[outcome] = math.max(0, (ns.db.session[outcome] or 1) - 1)
         end
-        if outcome == "damage" and entry.isCrit then
-            ns.db.overall.damageCrit = math.max(0, (ns.db.overall.damageCrit or 1) - 1)
+        local critKey = CRIT_KEY[outcome]
+        if critKey and entry.isCrit then
+            ns.db.overall[critKey] = math.max(0, (ns.db.overall[critKey] or 1) - 1)
             if ns.db.session then
-                ns.db.session.damageCrit = math.max(0, (ns.db.session.damageCrit or 1) - 1)
+                ns.db.session[critKey] = math.max(0, (ns.db.session[critKey] or 1) - 1)
             end
         end
     end
@@ -336,6 +385,7 @@ end
 function ns.ResetSession()
     if ns.db and ns.db.session then
         ns.db.session.health     = 0
+        ns.db.session.healthCrit = 0
         ns.db.session.mana       = 0
         ns.db.session.speed      = 0
         ns.db.session.damage     = 0
@@ -348,6 +398,7 @@ function ns.ResetOverall()
     if ns.db then
         if ns.db.overall then
             ns.db.overall.health     = 0
+            ns.db.overall.healthCrit = 0
             ns.db.overall.mana       = 0
             ns.db.overall.speed      = 0
             ns.db.overall.damage     = 0
@@ -382,10 +433,11 @@ function ns.RecordOutcome(outcome, isCrit, sourceInfo)
     ov[outcome] = (ov[outcome] or 0) + 1
     ss[outcome] = (ss[outcome] or 0) + 1
 
-    local critFlag = (outcome == "damage" and isCrit) and true or false
+    local critKey  = CRIT_KEY[outcome]
+    local critFlag = (critKey ~= nil and isCrit) and true or false
     if critFlag then
-        ov.damageCrit = (ov.damageCrit or 0) + 1
-        ss.damageCrit = (ss.damageCrit or 0) + 1
+        ov[critKey] = (ov[critKey] or 0) + 1
+        ss[critKey] = (ss[critKey] or 0) + 1
     end
 
     -- Prepend to roll history (newest at index 1)
@@ -544,7 +596,7 @@ local function ResolveWindow(outcome, isCrit, reason, isAuth)
         activeWindow.outcome      = outcome
         activeWindow.firstReason  = reason
         activeWindow.isAuth       = isAuth and true or false
-        activeWindow.critRecorded = (outcome == "damage" and isCrit) and true or false
+        activeWindow.critRecorded = (CRIT_KEY[outcome] ~= nil and isCrit) and true or false
         if activeTrace then
             local dt = math.floor((GetTime() - activeTrace.startTime) * 1000 + 0.5)
             activeTrace.resolution = string.format("%s%s via %s at +%dms",
@@ -561,19 +613,20 @@ local function ResolveWindow(outcome, isCrit, reason, isAuth)
     -- 2. Same outcome seen again in the 1.0s window (confirmation or crit upgrade, never double-counted)
     if not activeWindow.isConflict and activeWindow.outcome == outcome then
         if isAuth then activeWindow.isAuth = true end
-        if outcome == "damage" and isCrit and not activeWindow.critRecorded then
+        local critKey = CRIT_KEY[outcome]
+        if critKey and isCrit and not activeWindow.critRecorded then
             activeWindow.critRecorded = true
             if activeTrace then
                 local dt = math.floor((GetTime() - activeTrace.startTime) * 1000 + 0.5)
                 activeTrace.resolution = tostring(activeTrace.resolution) .. string.format(" -> CRIT upgraded via %s at +%dms", tostring(reason), dt)
             end
-            ns.db.overall.damageCrit = (ns.db.overall.damageCrit or 0) + 1
-            ns.db.session.damageCrit = (ns.db.session.damageCrit or 0) + 1
-            if ns.db.history and ns.db.history[1] and ns.db.history[1].outcome == "damage" then
+            ns.db.overall[critKey] = (ns.db.overall[critKey] or 0) + 1
+            ns.db.session[critKey] = (ns.db.session[critKey] or 0) + 1
+            if ns.db.history and ns.db.history[1] and ns.db.history[1].outcome == outcome then
                 ns.db.history[1].isCrit = true
             end
-            DebugPrint("Upgraded current Damage proc to CRIT (" .. tostring(reason) .. ")")
-            if ns.RefreshUI then ns.RefreshUI("damage") end
+            DebugPrint(string.format("Upgraded current %s proc to CRIT (%s)", outcome:upper(), tostring(reason)))
+            if ns.RefreshUI then ns.RefreshUI(outcome) end
         elseif activeTrace then
             local dt = math.floor((GetTime() - activeTrace.startTime) * 1000 + 0.5)
             activeTrace.confirmations = activeTrace.confirmations or {}
@@ -603,8 +656,11 @@ local function ResolveWindow(outcome, isCrit, reason, isAuth)
         if ov and ov[orig] then ov[orig] = math.max(0, (ov[orig] or 1) - 1) end
         if ss and ss[orig] then ss[orig] = math.max(0, (ss[orig] or 1) - 1) end
         if activeWindow.critRecorded then
-            if ov then ov.damageCrit = math.max(0, (ov.damageCrit or 1) - 1) end
-            if ss then ss.damageCrit = math.max(0, (ss.damageCrit or 1) - 1) end
+            local origCritKey = CRIT_KEY[orig]
+            if origCritKey then
+                if ov then ov[origCritKey] = math.max(0, (ov[origCritKey] or 1) - 1) end
+                if ss then ss[origCritKey] = math.max(0, (ss[origCritKey] or 1) - 1) end
+            end
         end
         activeWindow.conflicts   = { orig, outcome }
         activeWindow.conflictSet = { [orig] = true, [outcome] = true }
@@ -998,8 +1054,9 @@ ev:SetScript("OnEvent", function(_, event, arg1, arg2, arg3, arg4, arg5)
         if activeWindow or inPreCast then
             local elapsed = activeWindow and (GetTime() - activeWindow.startTime) or 0
             if combatEvent == "HEAL" and elapsed <= 0.15 then
-                DebugPrint("UNIT_COMBAT: HEAL")
-                RecordOrBufferSignal("health", false, "UNIT_COMBAT:HEAL", false)
+                local isCrit = (flagText == "CRITICAL")
+                DebugPrint("UNIT_COMBAT: HEAL" .. (isCrit and " [CRIT]" or ""))
+                RecordOrBufferSignal("health", isCrit, "UNIT_COMBAT:HEAL", false)
             elseif combatEvent == "ENERGIZE" and elapsed <= 0.15 then
                 DebugPrint("UNIT_COMBAT: ENERGIZE")
                 RecordOrBufferSignal("mana", false, "UNIT_COMBAT:ENERGIZE", false)
@@ -1025,7 +1082,10 @@ ev:SetScript("OnEvent", function(_, event, arg1, arg2, arg3, arg4, arg5)
         if ctype == "MANA" or ctype == "ENERGIZE" or ctype == "PERIODIC_ENERGIZE" then
             DebugPrint("COMBAT_TEXT_UPDATE: " .. tostring(ctype))
             RecordOrBufferSignal("mana", false, "COMBAT_TEXT:" .. ctype, false)
-        elseif ctype == "HEAL" or ctype == "HEAL_CRIT" then
+        elseif ctype == "HEAL_CRIT" then
+            DebugPrint("COMBAT_TEXT_UPDATE: " .. tostring(ctype))
+            RecordOrBufferSignal("health", true, "COMBAT_TEXT:" .. ctype, false)
+        elseif ctype == "HEAL" then
             DebugPrint("COMBAT_TEXT_UPDATE: " .. tostring(ctype))
             RecordOrBufferSignal("health", false, "COMBAT_TEXT:" .. ctype, false)
         elseif ctype == "SPELL_DAMAGE_CRIT" then
@@ -1133,7 +1193,7 @@ SlashCmdList.SATCHELTRACKER = function(msg)
     elseif cmd == "test" then
         local roll = math.random(1, 4)
         local outcome = ns.OUTCOME_KEYS[roll]
-        local isCrit = (outcome == "damage") and (math.random(1, 100) <= 25) or false
+        local isCrit = (CRIT_KEY[outcome] ~= nil) and (math.random(1, 100) <= 25) or false
         db.manualShow = true
         if ns.UpdateVisibility then ns.UpdateVisibility() end
         ns.RecordOutcome(outcome, isCrit, "test")
